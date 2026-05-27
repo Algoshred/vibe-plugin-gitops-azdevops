@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
+      - ".gitignore"
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test & Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - name: Install dependencies
+        run: bun install
+      - name: Lint
+        run: |
+          if jq -e '.scripts.lint' package.json >/dev/null 2>/dev/null && ( [ -f eslint.config.js ] || [ -f eslint.config.mjs ] ); then
+            bun run lint
+          else
+            echo "Skipping lint"
+          fi
+      - name: Type check
+        run: |
+          if jq -e '.scripts["type:check"]' package.json >/dev/null 2>/dev/null; then
+            bun run type:check
+          else
+            echo "Skipping type check"
+          fi
+      - name: Build
+        run: bun run build
+      - name: Test
+        run: |
+          if jq -e '.scripts.test' package.json >/dev/null 2>/dev/null; then
+            bun run test
+          else
+            echo "Skipping test"
+          fi
+
+  pr-gate:
+    name: PR Gate
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: PR Gate aggregator
+        run: echo "PR Gate OK"
+
+  publish-npmjs:
+    name: Publish to npmjs
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - name: Install dependencies
+        run: bun install
+      - name: Build
+        run: bun run build
+      - name: Pre-cache npm CLI
+        run: bunx npm@latest --version
+      - name: Compute CalVer version
+        id: version
+        run: |
+          NAME=$(bun -e "console.log(require('./package.json').name)")
+          YYYY=$(date -u '+%Y')
+          MDD=$((10#$(date -u '+%m%d')))
+          DATE_PREFIX="${YYYY}.${MDD}"
+          EXISTING=$(bunx npm@latest view "${NAME}" versions --json 2>/dev/null \
+            | jq -r '.[]? // empty' \
+            | grep -E "^${DATE_PREFIX}\.[0-9]+$" | sort -t. -k3 -n || true)
+          MAX_PATCH=$(echo "$EXISTING" | tail -1 | cut -d. -f3)
+          NEXT_PATCH=$(( ${MAX_PATCH:-0} + 1 ))
+          VERSION="${DATE_PREFIX}.${NEXT_PATCH}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing: $NAME@$VERSION"
+      - name: Publish to npmjs
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PUBLISH_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cat > .npmrc << NPMRC
+          //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
+          NPMRC
+          sed -i 's/^ *//' .npmrc
+          bunx npm@latest version "$PUBLISH_VERSION" --no-git-tag-version --allow-same-version
+          bunx npm@latest publish --registry "https://registry.npmjs.org/" --tag latest --access public --ignore-scripts

@@ -1,0 +1,10 @@
+pre-push:
+  parallel: false
+  commands:
+    sanity:
+      run: |
+        if grep -q '"sanity"' package.json; then
+          bun run sanity
+        else
+          echo "no sanity script; skipping"
+        fi

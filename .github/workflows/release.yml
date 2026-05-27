@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "[0-9][0-9][0-9][0-9].[0-9]*.[0-9]*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "CalVer version (e.g., 2026.527.1)"
+        required: false
+        type: string
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release to npmjs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      INPUT_VERSION: ${{ inputs.version }}
+      REF_NAME: ${{ github.ref_name }}
+      EVENT_NAME: ${{ github.event_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - name: Install dependencies
+        run: bun install
+      - name: Lint & type check
+        run: bun run lint && bun run type:check
+      - name: Build
+        run: bun run build
+      - name: Pre-cache npm CLI
+        run: bunx npm@latest --version
+      - name: Determine version
+        id: version
+        run: |
+          NAME=$(bun -e "console.log(require('./package.json').name)")
+          if [ "$EVENT_NAME" = "push" ] && [ -n "$REF_NAME" ]; then
+            VERSION="$REF_NAME"
+          elif [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            YYYY=$(date -u '+%Y')
+            MDD=$((10#$(date -u '+%m%d')))
+            DATE_PREFIX="${YYYY}.${MDD}"
+            EXISTING=$(bunx npm@latest view "${NAME}" versions --json 2>/dev/null \
+              | jq -r '.[]? // empty' \
+              | grep -E "^${DATE_PREFIX}\.[0-9]+$" | sort -t. -k3 -n || true)
+            MAX_PATCH=$(echo "$EXISTING" | tail -1 | cut -d. -f3)
+            NEXT_PATCH=$(( ${MAX_PATCH:-0} + 1 ))
+            VERSION="${DATE_PREFIX}.${NEXT_PATCH}"
+          fi
+          if ! echo "$VERSION" | grep -qE '^[0-9]{4}\.[1-9][0-9]{0,3}\.[0-9]+$'; then
+            echo "::error::Invalid CalVer: $VERSION"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+      - name: Publish to npmjs (public)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PUBLISH_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cat > .npmrc << NPMRC
+          //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
+          NPMRC
+          sed -i 's/^ *//' .npmrc
+          bunx npm@latest version "$PUBLISH_VERSION" --no-git-tag-version --allow-same-version
+          bunx npm@latest publish --registry "https://registry.npmjs.org/" --access public --ignore-scripts
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REL_VERSION: ${{ steps.version.outputs.version }}
+          REL_NAME: ${{ steps.version.outputs.name }}
+        run: |
+          gh release create "$REL_VERSION" \
+            --title "${REL_NAME}@${REL_VERSION}" \
+            --notes "## ${REL_NAME}@${REL_VERSION}
+
+Install: \`npm install ${REL_NAME}@${REL_VERSION}\`" \
+  --latest 2>/dev/null || echo "Release already exists"
