@@ -58,6 +58,26 @@ describe("AzureDevOpsProvider", () => {
     expect(v.account).toBe("vignesh");
   });
 
+  test("honours meta.baseUrl override (on-prem / replay)", async () => {
+    const seen: string[] = [];
+    restore = setupMockFetch((url) => {
+      seen.push(url);
+      if (url.includes("connectionData")) {
+        return { body: { authenticatedUser: { providerDisplayName: "v" } } };
+      }
+      return { body: {} };
+    });
+    const p = new AzureDevOpsProvider(stubHost);
+    await p.saveCredentials({
+      kind: "pat",
+      token: "xxx",
+      meta: { organization: "my-org", baseUrl: "http://localhost:8772" },
+    });
+    await p.validateCredentials();
+    expect(seen.some((u) => u.startsWith("http://localhost:8772/my-org"))).toBe(true);
+    expect(seen.some((u) => u.startsWith("https://dev.azure.com"))).toBe(false);
+  });
+
   test("listRepos resolves project -> repos", async () => {
     restore = setupMockFetch((url) => {
       if (url.includes("connectionData")) {

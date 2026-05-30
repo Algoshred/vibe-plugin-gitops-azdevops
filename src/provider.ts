@@ -98,6 +98,9 @@ export class AzureDevOpsProvider implements GitOpsProvider {
   private readonly log: BoundLogger;
   private token: string | null = null;
   private organisation: string | null = null;
+  // Default Azure DevOps Services host. Overridable via `meta.baseUrl`/`meta.host`
+  // for Azure DevOps Server (on-prem) and deterministic E2E replay against a mock.
+  private apiHost = "https://dev.azure.com";
   private readonly cache = new Map<string, CacheEntry<unknown>>();
 
   constructor(host: HostServices) {
@@ -110,6 +113,7 @@ export class AzureDevOpsProvider implements GitOpsProvider {
     if (s) {
       this.token = s.token;
       this.organisation = s.meta?.["organization"] ?? null;
+      this.apiHost = this.resolveApiHost(s.meta);
       this.log.info("Loaded persisted AzDO PAT");
     }
   }
@@ -156,11 +160,16 @@ export class AzureDevOpsProvider implements GitOpsProvider {
     return new GitOpsError("UPSTREAM", "AzDO: " + s + " " + body.slice(0, 200));
   }
 
+  private resolveApiHost(meta?: Record<string, string>): string {
+    const override = meta?.["baseUrl"] ?? meta?.["host"];
+    return override ? override.replace(/\/$/, "") : "https://dev.azure.com";
+  }
+
   private async rest<T>(path: string, project?: string): Promise<T> {
     const org = this.requireOrg();
     const url = path.startsWith("http")
       ? path
-      : `https://dev.azure.com/${encodeURIComponent(org)}${project ? "/" + encodeURIComponent(project) : ""}${path}`;
+      : `${this.apiHost}/${encodeURIComponent(org)}${project ? "/" + encodeURIComponent(project) : ""}${path}`;
     const res = await fetch(url, { headers: this.headers() });
     // AzDO returns 203 for unauth as well as 401 sometimes
     if (res.status === 203) {
@@ -312,6 +321,7 @@ export class AzureDevOpsProvider implements GitOpsProvider {
     await this.host.storage?.set(STORAGE_NS, KEY_PAT, JSON.stringify(env));
     this.token = input.token;
     this.organisation = input.meta["organization"];
+    this.apiHost = this.resolveApiHost(input.meta);
     this.cache.clear();
   }
 
@@ -321,6 +331,7 @@ export class AzureDevOpsProvider implements GitOpsProvider {
       if (!s) return { ok: false, message: "No PAT stored" };
       this.token = s.token;
       this.organisation = s.meta?.["organization"] ?? null;
+      this.apiHost = this.resolveApiHost(s.meta);
     }
     try {
       const data = await this.rest<{
