@@ -74,7 +74,9 @@ describe("AzureDevOpsProvider", () => {
       meta: { organization: "my-org", baseUrl: "http://localhost:8772" },
     });
     await p.validateCredentials();
-    expect(seen.some((u) => u.startsWith("http://localhost:8772/my-org"))).toBe(true);
+    expect(seen.some((u) => u.startsWith("http://localhost:8772/my-org"))).toBe(
+      true,
+    );
     expect(seen.some((u) => u.startsWith("https://dev.azure.com"))).toBe(false);
   });
 

@@ -70,12 +70,7 @@ export interface PipelineRun {
   branch: string;
   status: "queued" | "running" | "completed" | "waiting";
   conclusion?:
-    | "success"
-    | "failure"
-    | "cancelled"
-    | "skipped"
-    | "timed_out"
-    | "neutral";
+    "success" | "failure" | "cancelled" | "skipped" | "timed_out" | "neutral";
   event?: string;
   startedAt?: string;
   completedAt?: string;
@@ -247,12 +242,7 @@ export interface GitOpsProvider {
 }
 
 export type GitOpsErrorCode =
-  | "AUTH"
-  | "NOT_FOUND"
-  | "RATE_LIMITED"
-  | "FORBIDDEN"
-  | "UPSTREAM"
-  | "INVALID";
+  "AUTH" | "NOT_FOUND" | "RATE_LIMITED" | "FORBIDDEN" | "UPSTREAM" | "INVALID";
 
 export class GitOpsError extends Error {
   readonly code: GitOpsErrorCode;
